@@ -1,0 +1,215 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Resources:
+
+  VoiceTranslatorBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: PublicRead
+      WebsiteConfiguration:
+        IndexDocument: voice-translator.html
+      CorsConfiguration:
+        CorsRules:
+        - AllowedHeaders: ['*']
+          AllowedMethods: [GET,PUT,POST,HEAD]
+          AllowedOrigins: ['*']
+          Id: myCORSRuleId1
+          MaxAge: '3600'
+
+  VoiceTranslatorBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref 'VoiceTranslatorBucket'
+      PolicyDocument:
+        Statement:
+        - Action: ['s3:GetObject']
+          Effect: Allow
+          Principal: "*"
+          Resource:
+          - !Join ['', ['arn:aws:s3:::', !Ref 'VoiceTranslatorBucket', '/*']]
+
+  VoiceTranslatorLambda:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Handler: "app.babelfish.LambdaHandler::handleRequest"
+      Role: !GetAtt VoiceTranslatorLambdaRole.Arn
+      Code:
+        S3Bucket: "tomash-us-east-1"
+        S3Key: "voice-translator/lambda/voice-translator-lambda.jar"
+      Runtime: "java8"
+      MemorySize: 1024
+      Timeout: 30
+
+  CfDistribution:
+    Metadata:
+      Comment: 'CloudFront distribution over Voice Translator App - to enable HTTPS'
+    Properties:
+      DistributionConfig:
+        Comment: 'CloudFront distribution over Voice Translator App - to enable HTTPS'
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - 'HEAD'
+            - 'GET'
+          CachedMethods:
+            - 'HEAD'
+            - 'GET'
+          Compress: false
+          DefaultTTL: 86400
+          ForwardedValues:
+            Cookies:
+              Forward: 'none'
+            Headers:
+              - 'Origin'
+            QueryString: false
+          DefaultTTL: 0
+          TargetOriginId: !Sub 's3-origin-${VoiceTranslatorBucket}'
+          ViewerProtocolPolicy: 'redirect-to-https'
+        DefaultRootObject: 'index.html'
+        Enabled: true
+        HttpVersion: 'http1.1'
+        IPV6Enabled: false
+        Origins:
+          - DomainName: !GetAtt VoiceTranslatorBucket.DomainName
+            Id: !Sub 's3-origin-${VoiceTranslatorBucket}'
+            S3OriginConfig: {}
+        PriceClass: 'PriceClass_All'
+    Type: 'AWS::CloudFront::Distribution'
+
+  VoiceTranslatorLambdaRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: TranscribeAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "transcribe:StartStreamTranscription"
+                Resource: "*"
+        - PolicyName: CloudWatchPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: "arn:aws:logs:*:*:*"
+        - PolicyName: TranslateAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "translate:TranslateText"
+                Resource: "*"
+        - PolicyName: TranslateAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "translate:TranslateText"
+                Resource: "*"
+        - PolicyName: PollyAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "polly:SynthesizeSpeech"
+                Resource: "*"
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "s3:GetObject"
+                  - "s3:PutObject"
+                  - "s3:PutObjectAcl"
+                Resource:
+                  Fn::Join:
+                    - ""
+                    -
+                      - "arn:aws:s3:::"
+                      -  Ref: "VoiceTranslatorBucket"
+                      - "/*"
+        - PolicyName: S3LocationAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "s3:GetBucketLocation"
+                Resource: "arn:aws:s3:::*"
+
+
+  CognitoIdentityPool:
+    Type: AWS::Cognito::IdentityPool
+    Properties:
+      AllowUnauthenticatedIdentities: True
+
+
+  IdentityPoolRoleMapping:
+    Type: "AWS::Cognito::IdentityPoolRoleAttachment"
+    Properties:
+      IdentityPoolId: !Ref CognitoIdentityPool
+      Roles:
+        unauthenticated: !GetAtt CognitoUnAuthorizedRole.Arn
+
+  CognitoUnAuthorizedRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Federated: "cognito-identity.amazonaws.com"
+            Action:
+              - "sts:AssumeRoleWithWebIdentity"
+      Policies:
+        - PolicyName: "CognitoUnauthorizedPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "lambda:InvokeFunction"
+                Resource:
+                  - !GetAtt VoiceTranslatorLambda.Arn
+              - Effect: Allow
+                Action:
+                  - "s3:PutObject"
+                Resource:
+                  Fn::Join:
+                    - ""
+                    -
+                      - "arn:aws:s3:::"
+                      -  Ref: "VoiceTranslatorBucket"
+                      - "/*"
+
+Outputs:
+  VoiceTranslatorLink:
+    Description: 'Domain name for our cloudfront distribution'
+    Value: !Join [ "", [ "https://", !GetAtt CfDistribution.DomainName, "/voice-translator.html" ] ]
+  VoiceTranslatorBucket:
+    Description: VoiceTranslator S3 Bucket
+    Value: !Ref VoiceTranslatorBucket
+  IdentityPoolIdOutput:
+    Description: IdentityPoolId
+    Value: !Ref CognitoIdentityPool
+  VoiceTranslatorLambda:
+    Description: VoiceTranslator Lambda
+    Value: !Ref VoiceTranslatorLambda
