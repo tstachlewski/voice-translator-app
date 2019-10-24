@@ -54,7 +54,6 @@ Resources:
             - 'HEAD'
             - 'GET'
           Compress: false
-          DefaultTTL: 86400
           ForwardedValues:
             Cookies:
               Forward: 'none'
